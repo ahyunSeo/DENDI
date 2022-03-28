@@ -1,6 +1,6 @@
-## DENse and Diverse symmetry dataset (DENDI)
-<p>
-Ahyun Seo, Byoungjin Kim, Suha Kwak, Minsu Cho
+## DENse and Diverse symmetry dataset (DENDI), CVPR 2022
+<p align="center">
+Ahyun Seo, Byungjin Kim, Suha Kwak, Minsu Cho
 </p>
 
 <p align="center">
@@ -10,7 +10,7 @@ Ahyun Seo, Byoungjin Kim, Suha Kwak, Minsu Cho
 
 Official Dataset proposed in *Reflection and Rotation Symmetry Detection via Equivariant Learning (CVPR 2022)*.
 
-Contributors of this dataset: [Ahyun Seo](https://github.com/ahyunSeo), [Byoungjin Kim](https://github.com/kbjpc123), [Yunseon Choi](https://github.com/OMEGA-Y)
+Contributors of this dataset: [Ahyun Seo](https://github.com/ahyunSeo), [Byungjin Kim](https://github.com/kbjpc123), [Yunseon Choi](https://github.com/OMEGA-Y)
 
 Download [onedrive](https://postechackr-my.sharepoint.com/:u:/g/personal/lastborn94_postech_ac_kr/EbNm9_yjFMRLjviFeCHH630BgLJFp38qYY-2eqiCl5EzIg?e=Blo8X1)
 
