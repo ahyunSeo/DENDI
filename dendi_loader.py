@@ -1,39 +1,65 @@
 import os
-import pickle
-
-from numpy.core.defchararray import center
 import torch
-import pdb
 import random
 import numpy as np
 import cv2
-import scipy.io as io
-
 import json
-from tqdm import tqdm
 from torch.utils.data import Dataset
-from tqdm import trange
 import PIL
 from PIL import Image, ImageDraw
 import matplotlib.pyplot as plt
 import torch.nn.functional as F
 from torchvision import transforms
 
-from matplotlib.collections import PatchCollection
-from matplotlib.patches import Polygon
-
-
-from utils import *
-from shapely.geometry import Polygon, Point
-from shapely import affinity
-import numpy as np
-from PIL import Image, ImageDraw
+# from matplotlib.collections import PatchCollection
+# from matplotlib.patches import Polygon
 
 from utils import *
-from shapely.geometry import Polygon, Point
+from shapely.geometry import Polygon
 from shapely import affinity
 import numpy as np
+import albumentations as A
+from albumentations.pytorch import ToTensorV2
+import torch.nn as nn
+import torch.nn.functional as F
 from PIL import Image, ImageDraw
+
+def draw_axis(lines, size):
+    axis = Image.new('L', size)
+    # w, h = img.size
+    draw = ImageDraw.Draw(axis)
+    length = np.array([size[0], size[1], size[0], size[1]])
+    
+    # x1, y1, x2, y2
+    line_coords = []
+
+    for idx, coords in enumerate(lines):
+        if coords[0] > coords[2]:
+            coords = np.roll(coords, -2)
+        draw.line(list(coords), fill=(idx + 1))
+        coords = np.array(coords).astype(np.float32)
+        _line_coords = coords / length
+        line_coords.append(_line_coords)
+    axis = np.asarray(axis).astype(np.float32)
+    return axis, line_coords
+
+def match_input_type(img):
+    img = np.asarray(img)
+    if img.shape[-1] != 3:
+        img = np.stack((img, img, img), axis=-1)
+    return img 
+    
+def norm(img):
+    mean = torch.Tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
+    std = torch.Tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
+    img = (img - mean) / std
+    return img
+
+def unnorm(img):
+    mean = torch.Tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
+    std = torch.Tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
+    img = img * std + mean
+    return img
 
 class DrawEllipse(object):
     def __init__(self, cuts=120):
@@ -95,7 +121,7 @@ class DrawEllipse(object):
         return axis, (points[0][0], points[0][1])
 
 class NewSymmetryDatasetsBase(Dataset):
-    def __init__(self, sym_type, get_polygon=2, split='train', root='./sym_datasets/DENDI', with_ref_circle=1, n_angle=8):
+    def __init__(self, sym_type, get_polygon=2, split='train', root='./sym_datasets/DENDI', with_ref_circle=1, n_theta=8):
         super(NewSymmetryDatasetsBase, self).__init__()
         self.root = root
         self.split = split
@@ -105,13 +131,13 @@ class NewSymmetryDatasetsBase(Dataset):
         self.order_list = [0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 16, 17, 20, 22, 26, 28, 29] # 20+1
         self.img_list, self.gt_list = self.get_data_list()
         self.ellipse = DrawEllipse()
-        self.n_angle = n_angle
+        self.n_theta = n_theta
         self.ellipse_theta_filter = self.construct_theta_filter()
 
     def construct_theta_filter(self):
-        # angle_interval, n_angle = 45, 8
-        angle_interval = int(360 / self.n_angle)
-        n_angle = self.n_angle        
+        # angle_interval, n_theta = 45, 8
+        angle_interval = int(360 / self.n_theta)
+        n_theta = self.n_theta        
         if self.split == 'test':
             c = int(417*5)
             # c = int(417 * 1.6)
@@ -125,12 +151,12 @@ class NewSymmetryDatasetsBase(Dataset):
         tangents = - (dh_dw[:, 0]) / (dh_dw[:, 1] + 1e-2)
         theta = np.arctan(tangents)
         theta = (theta * 180 / np.pi) % 360
-        t_lbl = torch.zeros(c*2+1, c*2+1, n_angle)
+        t_lbl = torch.zeros(c*2+1, c*2+1, n_theta)
 
         d = angle_interval / 2
         k = theta // d
         a = k + 1 - theta / d
-        indices1, indices2 = (k + 3) % n_angle, (k + 4) % n_angle
+        indices1, indices2 = (k + 3) % n_theta, (k + 4) % n_theta
 
         t_lbl[indices_all[:, 0], indices_all[:, 1], indices1.long()] = a
         t_lbl[indices_all[:, 0], indices_all[:, 1], indices2.long()] = 1 - a
@@ -187,6 +213,7 @@ class NewSymmetryDatasetsBase(Dataset):
                 # (cx, cy, cs, cy)
                 _coords = [center_coords[0] / size[0], center_coords[1] / size[1], \
                     center_coords[0] / size[0], center_coords[1] / size[1] ]
+                
                 ellipse_coords.append(_coords)
         elif self.with_ref_circle in [2]:
             for i, pts in enumerate(ellipse_pts):
@@ -257,9 +284,9 @@ class NewSymmetryDatasetsBase(Dataset):
 
     def process_theta_ref(self, axis_lbl, axis_coords):
         im_h, im_w = axis_lbl.shape[-2], axis_lbl.shape[-1]
-        a_lbl = torch.zeros_like(axis_lbl).unsqueeze(0).unsqueeze(1).expand(-1, self.n_angle, -1, -1)
+        a_lbl = torch.zeros_like(axis_lbl).unsqueeze(0).unsqueeze(1).expand(-1, self.n_theta, -1, -1)
         ellipse_mask = (axis_lbl > 1000).float()
-        ellipse_a_lbl = torch.zeros_like(axis_lbl).unsqueeze(-1).expand(-1, -1, self.n_angle)
+        ellipse_a_lbl = torch.zeros_like(axis_lbl).unsqueeze(-1).expand(-1, -1, self.n_theta)
 
         if axis_lbl.max() > 1000:
             # ellipse_lbl = axis_lbl * ellipse_mask
@@ -294,16 +321,20 @@ class NewSymmetryDatasetsBase(Dataset):
             ### output axis (0 or 1) # angle label (H, W, nangle) sum 1
             axis_coords = np.array(axis_coords[:num_lines])
             ### y in image coordinate is different from the world coord
-            tangents = -(axis_coords[:, 3] - axis_coords[:, 1]) / (axis_coords[:, 2] - axis_coords[:, 0] + 1e-2) 
-            theta = np.arctan(tangents)
-            theta = theta * 180 / np.pi
+            if axis_coords[:, 2] == axis_coords[:, 0]:
+                theta = 90
+            else:
+                tangents = -(axis_coords[:, 3] - axis_coords[:, 1]) / (axis_coords[:, 2] - axis_coords[:, 0]) 
+                theta = np.arctan(tangents)
+                theta = theta * 180 / np.pi
             # kernel theta interval
             d = self.angle_interval / 2
             k = theta // d
             a = k + 1 - theta / d
-            indices1, indices2 = (k + 3) % self.n_angle, (k + 4) % self.n_angle
+            # indices1, indices2 = (k + 3) % self.n_theta, (k + 4) % self.n_theta
+            indices1, indices2 = (k) % self.n_theta, (k + 1) % self.n_theta
             # a_lbl [dummy 0, kernel1, kernel2, ...]
-            a_lbl = np.zeros((theta.shape[0] + 1, self.n_angle), dtype=np.float32)
+            a_lbl = np.zeros((theta.shape[0] + 1, self.n_theta), dtype=np.float32)
             a_lbl[np.arange(theta.shape[0]) + 1, indices1.astype(np.uint8)] = a
             a_lbl[np.arange(theta.shape[0]) + 1, indices2.astype(np.uint8)] = 1 - a
             # a_lbl (H, W, nangle)
@@ -357,8 +388,8 @@ def draw_points(points, orders, size):
 
 class NewSymmetryDatasets(NewSymmetryDatasetsBase):
     def __init__(self, sym_type='rotation', input_size=(417, 417), get_polygon=2, split='train', root='./sym_datasets/DENDI', \
-                get_theta=False, n_classes=21, with_ref_circle=1, t_resize=True):
-        super(NewSymmetryDatasets, self).__init__(sym_type, get_polygon, split, root, with_ref_circle)
+                get_theta=False, n_classes=21, with_ref_circle=1, t_resize=False, n_theta=8):
+        super(NewSymmetryDatasets, self).__init__(sym_type, get_polygon, split, root, with_ref_circle, n_theta)
         self.label = [sym_type]
         self.sym_type = sym_type
         self.split = split
@@ -370,8 +401,8 @@ class NewSymmetryDatasets(NewSymmetryDatasetsBase):
             self.mean = [0, 0, 0]
             self.std = [1, 1, 1]
         self.n_classes = n_classes
-        self.angle_interval = 45
-        self.n_angle = 8 # hardcode
+        self.angle_interval = (360 // n_theta)
+        self.n_theta = n_theta
         self.t_resize = t_resize 
 
     def process_data(self, gt, size):
@@ -389,6 +420,11 @@ class NewSymmetryDatasets(NewSymmetryDatasetsBase):
 
         if reflection:
             axis, axis_lbl, axis_coords = gt['axis'], gt['axis_lbl'], gt['line_coords']
+            
+            axis_coords1, axis_coords2 = [], []
+            for c in axis_coords:
+                axis_coords1.append([c[0], c[1], c[0], c[1]])
+                axis_coords2.append([c[2], c[3], c[2], c[3]])
             axis_gs = cv2.GaussianBlur(axis, (5,5), cv2.BORDER_DEFAULT)
             axis_gs = np.clip(axis_gs, 0, 0.21260943) # in case of the intersections
         else:
@@ -401,8 +437,12 @@ class NewSymmetryDatasets(NewSymmetryDatasetsBase):
             img, axis_gs = t_resize['image'], t_resize['axis_gs']
 
         if reflection:
-            t = transform(image = img, axis = axis, axis_gs = axis_gs, axis_lbl=axis_lbl, axis_coords=axis_coords)
-            img, axis, axis_gs, axis_lbl, axis_coords = t["image"], t["axis"], t["axis_gs"], t["axis_lbl"], t["axis_coords"]
+            t = transform(image = img, axis = axis, axis_gs = axis_gs, axis_lbl=axis_lbl, axis_coords1=axis_coords1, axis_coords2=axis_coords2)
+            img, axis, axis_gs, axis_lbl, axis_coords1, axis_coords2 = \
+                t["image"], t["axis"], t["axis_gs"], t["axis_lbl"], t["axis_coords1"], t["axis_coords2"]
+            axis_coords = []
+            for a, b in zip(axis_coords1, axis_coords2):
+                axis_coords.append([a[0], a[1], b[0], b[1]])
         else:
             t = transform(image = img, axis = axis, axis_gs = axis_gs, a_lbl=a_lbl)
             img, axis, axis_gs, a_lbl = t["image"], t["axis"], t["axis_gs"], t["a_lbl"]
@@ -439,7 +479,8 @@ class NewSymmetryDatasets(NewSymmetryDatasetsBase):
             ], additional_targets={'axis_gs': 'mask'})
         else:
             additional_targets['axis_lbl'] = 'mask'
-            additional_targets['ref_axis_coords'] = 'bboxes'
+            additional_targets['axis_coords1'] = 'bboxes'
+            additional_targets['axis_coords2'] = 'bboxes'
             transform = A.Compose(
                     [ 
                         A.LongestMaxSize(max_size=self.input_size[0]),
@@ -464,7 +505,7 @@ class NewSymmetryDatasets(NewSymmetryDatasetsBase):
             if ref_gt is not None:
                 axis, axis_lbl, axis_coords = ref_return['axis'], ref_return['axis_lbl'], ref_return['axis_coords']
                 if len(axis_coords) == 0:
-                    ref_a_lbl = torch.zeros(self.n_angle, axis.shape[-2], axis.shape[-1])
+                    ref_a_lbl = torch.zeros(self.n_theta, axis.shape[-2], axis.shape[-1])
                 else:
                     ref_a_lbl = self.process_theta_ref(axis_lbl, axis_coords).squeeze(0)
 
@@ -477,107 +518,36 @@ class NewSymmetryDatasets(NewSymmetryDatasetsBase):
             rot_return = rot_return['img'], rot_return['mask'], rot_return['axis'], rot_return['axis_gs'], False, rot_a_lbl
             return ref_return, rot_return
 
-
-class JointSymmetryDatasets(NewSymmetryDatasetsBase):
-    def __init__(self, sym_type='rotation', input_size=(417, 417), get_polygon=2, split='train', root='./sym_datasets/DENDI', \
-                get_theta=False, n_classes=21, with_ref_circle=1):
-        super(JointSymmetryDatasets, self).__init__(sym_type, get_polygon, split, root, with_ref_circle)
-        self.label = [sym_type]
-        self.sym_type = sym_type
-        self.split = split
+class CustomSymmetryDatasets(Dataset):
+    def __init__(self, input_size=(417, 417), root='./demo/img'):
+        super(CustomSymmetryDatasets, self).__init__()
         self.input_size = input_size
-        self.get_theta = get_theta
         self.mean = [0.485, 0.456, 0.406]
         self.std = [0.229, 0.224, 0.225]
-        if self.split == 'all':
-            self.mean = [0, 0, 0]
-            self.std = [1, 1, 1]
-        self.n_classes = n_classes
         self.angle_interval = 45
-        self.n_angle = 8 # hardcode 
+        self.n_theta = 8
+        self.img_list = self.get_img_list(root)
 
-    def process_data(self, gt, size):
-        return self.process_data_ref(gt, size), self.process_data_rot(gt, size)
-
-    def transform_data(self, img, ref_gt, rot_gt, transform, t_resize=None):
-        ref_axis, ref_axis_lbl, ref_axis_coords = ref_gt['axis'], ref_gt['axis_lbl'], ref_gt['line_coords']
-        ref_axis_gs = cv2.GaussianBlur(ref_axis, (5,5), cv2.BORDER_DEFAULT)
-        ref_axis_gs = np.clip(ref_axis_gs, 0, 0.21260943) # in case of the intersections
-        rot_axis, rot_a_lbl = rot_gt['axis_map'], rot_gt['order_map']
-        rot_axis_gs = cv2.GaussianBlur(rot_axis, (11, 11), cv2.BORDER_DEFAULT)
-        rot_axis_gs = np.clip(rot_axis_gs, 0, 0.01) # in case of the intersections
-
-        if self.split in ['test', 'val', 'all']:
-            t_resize = t_resize(image=img, ref_axis_gs=ref_axis_gs, rot_axis_gs=rot_axis_gs)
-            img, ref_axis_gs, rot_axis_gs = t_resize['image'], t_resize['ref_axis_gs'], t_resize['rot_axis_gs']
-            img = t_resize['image']
-
-        t = transform(image=img, ref_axis=ref_axis, ref_axis_gs=ref_axis_gs, ref_axis_lbl=ref_axis_lbl, ref_axis_coords=ref_axis_coords,\
-                        rot_axis=rot_axis, rot_axis_gs=rot_axis_gs, rot_a_lbl=rot_a_lbl)
-        img, ref_axis, ref_axis_gs, ref_axis_lbl, ref_axis_coords, rot_axis, rot_axis_gs, rot_a_lbl \
-        = t["image"], t["ref_axis"], t["ref_axis_gs"], t["ref_axis_lbl"], t["ref_axis_coords"],\
-            t["rot_axis"], t["rot_axis_gs"], t["rot_a_lbl"]
-
-        ref_mask, rot_mask = (ref_axis_gs != 255).unsqueeze(0), (rot_axis_gs != 255).unsqueeze(0)
-        ref_axis, rot_axis = ref_axis.unsqueeze(0), rot_axis.unsqueeze(0)
-        ref_axis_gs, rot_axis_gs = ref_axis_gs.unsqueeze(0), rot_axis_gs.unsqueeze(0)
-        ref_axis_gs, rot_axis_gs = ref_axis_gs / (ref_axis_gs.max() + 1e-5), rot_axis_gs / (rot_axis_gs.max() + 1e-5)
-        
-        ref_return = {'img':img, 'mask':ref_mask, 'axis':ref_axis, \
-                        'axis_gs':ref_axis_gs, 'axis_lbl':ref_axis_lbl, 'axis_coords':ref_axis_coords}
-        rot_return = {'img':img, 'mask':rot_mask, 'axis':rot_axis, 'axis_gs':rot_axis_gs, 'a_lbl':rot_a_lbl}
-        return ref_return, rot_return
-                
+    def get_img_list(self, root_dir):
+        img_names = []
+        for root, _, files in os.walk(root_dir):
+            for file in files:
+                if file.endswith(".png") or file.endswith(".jpg"):
+                    img_names.append(os.path.join(root, file))
+        return img_names
+            
     def __getitem__ (self, index):
-        img = Image.open(self.img_list[index]).convert('RGB')
-        ref_gt, rot_gt = self.process_data(self.gt_list[index], img.size)
+        img_path = self.img_list[index]
+        img = Image.open(img_path).convert('RGB')
         img = match_input_type(img)
 
-        t_resize, rot_a_lbl, ref_a_lbl = None, 0, 0
-        additional_targets={'ref_axis': 'mask', 'ref_axis_gs': 'mask', 'ref_a_lbl': 'mask',
-                            'rot_axis': 'mask', 'rot_axis_gs': 'mask', 'rot_a_lbl': 'mask',}
-        if self.split in ['test', 'val', 'all']:
-            additional_targets['ref_axis_lbl'] = 'mask'
-            transform = A.Compose(
-                        [ A.Normalize(self.mean, self.std),
-                          ToTensorV2(),
-                        ], additional_targets=additional_targets)
-            t_resize = A.Compose([
-                A.LongestMaxSize(max_size=self.input_size[0]),
-                A.PadIfNeeded(min_height=self.input_size[0], min_width=self.input_size[1], \
-                              border_mode=cv2.BORDER_CONSTANT, mask_value=255),
-            ], additional_targets={'ref_axis_gs': 'mask', 'rot_axis_gs': 'mask'})
-        else:
-            additional_targets['ref_axis_lbl'] = 'mask'
-            additional_targets['ref_axis_coords'] = 'bboxes'
-            transform = A.Compose(
-                    [ 
-                        A.LongestMaxSize(max_size=self.input_size[0]),
-                        A.PadIfNeeded(min_height=self.input_size[0], min_width=self.input_size[1], \
-                                      border_mode=cv2.BORDER_CONSTANT,),
-                    A.RandomRotate90(),
-                    A.Rotate(limit = 15, border_mode = cv2.BORDER_CONSTANT),
-                    A.ColorJitter (brightness=0.2, contrast=0.2, saturation=0.2, hue=0.2, always_apply=False, p=0.5),
-                    A.Normalize(self.mean, self.std),
-                    ToTensorV2(),
-                    ], additional_targets=additional_targets)
+        transform = A.Compose([
+                        A.Normalize(self.mean, self.std),
+                        ToTensorV2(),
+                        ])
         
-        ref_return, rot_return = self.transform_data(img, ref_gt, rot_gt, transform, t_resize)
+        t_img = transform(image = img)["image"]
+        return t_img, img_path
 
-        if self.get_theta:
-            if rot_gt is not None:
-                rot_a_lbl = self.process_theta_rot(rot_return['a_lbl'])
-            if ref_gt is not None:
-                axis, axis_lbl, axis_coords = ref_return['axis'], ref_return['axis_lbl'], ref_return['axis_coords']
-                if len(axis_coords) == 0:
-                    ref_a_lbl = torch.zeros(self.n_angle, axis.shape[-2], axis.shape[-1])
-                else:
-                    ref_a_lbl = self.process_theta_ref(axis_lbl, axis_coords).squeeze(0)
-
-        ref_return['a_lbl'] = ref_a_lbl
-        rot_return['a_lbl'] = rot_a_lbl
-        
-        ref_return = ref_return['img'], ref_return['mask'], ref_return['axis'], ref_return['axis_gs'], False, ref_a_lbl
-        rot_return = rot_return['img'], rot_return['mask'], rot_return['axis'], rot_return['axis_gs'], False, rot_a_lbl
-        return ref_return, rot_return
-
+    def __len__(self):
+        return len(self.img_list)
