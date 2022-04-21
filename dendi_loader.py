@@ -11,10 +11,6 @@ import matplotlib.pyplot as plt
 import torch.nn.functional as F
 from torchvision import transforms
 
-# from matplotlib.collections import PatchCollection
-# from matplotlib.patches import Polygon
-
-from utils import *
 from shapely.geometry import Polygon
 from shapely import affinity
 import numpy as np
@@ -553,3 +549,13 @@ class CustomSymmetryDatasets(Dataset):
 
     def __len__(self):
         return len(self.img_list)
+
+
+if __name__ == '__main__':
+    sym_type = 'reflection' # or rotation
+    input_size = 417
+
+    trainset = NewSymmetryDatasets(sym_type=sym_type, split='train', input_size=[input_size, input_size], get_theta=10, with_ref_circle=True, t_resize=False)
+    valset = NewSymmetryDatasets(sym_type=sym_type, split='val', input_size=[input_size, input_size], get_theta=10, with_ref_circle=True, t_resize=False)
+    testset = NewSymmetryDatasets(sym_type=sym_type, split='test', input_size=[input_size, input_size], get_theta=10, with_ref_circle=True, t_resize=False)
+

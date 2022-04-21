@@ -15,6 +15,32 @@ Contributors of this dataset: [Ahyun Seo](https://github.com/ahyunSeo), [Byungji
 Download [onedrive](https://postechackr-my.sharepoint.com/:u:/g/personal/lastborn94_postech_ac_kr/ES2ftVVmTc5Du78EBgfTGy8BwygV_HRa5nWciYeq3cTvoQ?e=y9ETja)
 
 
+### Environment
+```
+    conda create --name DENDI python=3.7
+    conda activate DENDI
+    conda install pytorch==1.7.0 torchvision==0.8.1 -c pytorch
+    conda install -c conda-forge matplotlib
+    pip install albumentations shapely opencv-python
+    
+    mkdir sym_datasets
+
+```
+
+### Datasets
+
+```
+.
+├── sym_datasets
+│   └── DENDI
+│       ├── symmetry
+│       ├── symmetry_polygon
+│       ├── reflection_split.pt
+│       ├── rotation_split.pt
+│       └── joint_split.pt
+└── (...) 
+```
+
 ### Citation
 If you find our code or paper useful to your research work, please consider citing:
 ```
