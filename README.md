@@ -21,7 +21,7 @@ Download [onedrive](https://postechackr-my.sharepoint.com/:u:/g/personal/lastbor
     conda activate DENDI
     conda install pytorch==1.7.0 torchvision==0.8.1 -c pytorch
     conda install -c conda-forge matplotlib
-    pip install albumentations shapely opencv-python
+    pip install albumentations==0.5.2 shapely opencv-python
     
     mkdir sym_datasets
 
